@@ -149,8 +149,6 @@ cdl_analyze_commands <- function(config) {
       envir = config$eval
     )
   }
-  layout <- drake_pmap(.l = config$plan, .f = list, jobs = config$jobs)
-  names(layout) <- config$plan$target
   config$default_condition_deps <- cdl_import_dependencies(
     config$trigger$condition,
     allowed_globals = config$allowed_globals_targets
@@ -159,14 +157,49 @@ cdl_analyze_commands <- function(config) {
     config$trigger$change,
     allowed_globals = config$allowed_globals_targets
   )
+  config$plan <- config$plan[order(config$plan$target), ]
+  cdl_init_layout(config)
+}
+
+cdl_init_layout <- function(config) {
+  layout <- drake_pmap(.l = config$plan, .f = list, jobs = config$jobs)
+  batch <- cdl_batch_partition(config$plan)
+  nms <- names(layout) <- config$plan$target
+  layout_batches <- tapply(X = layout, INDEX = batch, FUN = list)
+  ht_targets <- ht_new(config$plan$target)
   out <- lightly_parallelize(
-    X = layout,
-    FUN = cdl_prepare_layout,
+    X = layout_batches,
+    FUN = cdl_prepare_layout_memo,
     jobs = config$jobs,
-     config = config,
-    ht_targets = ht_new(config$plan$target)
+    config = config,
+    ht_targets = ht_targets
   )
-  names(out) <- config$plan$target
+  out <- unlist(out, recursive = FALSE, use.names = FALSE)
+  names(out) <- nms
+  out
+}
+
+cdl_prepare_layout_memo <- function(layout_batch, ht_targets, config) {
+  memo_expr(
+    cdl_prepare_layout_batch(
+      layout_batch = layout_batch,
+      ht_targets = ht_targets,
+      config = config
+    ),
+    cache = config$cache,
+    layout_batch = layout_batch
+  )
+}
+
+cdl_prepare_layout_batch <- function(layout_batch, ht_targets, config) {
+  nms <- names(layout_batch)
+  out <- lapply(
+    X = layout_batch,
+    FUN = cdl_prepare_layout,
+    ht_targets = ht_targets,
+    config = config
+  )
+  names(out) <- nms
   out
 }
 
@@ -274,4 +307,20 @@ cdl_parse_trigger <- function(trigger, envir) {
     trigger <- parse(text = trigger)
   }
   eval(trigger, envir = envir)
+}
+
+cdl_batch_partition <- function(plan) {
+  batches <- cdl_number_batches(plan_size = nrow(plan), batch_size = 1e3)
+  vapply(
+    plan$target,
+    FUN = integer_hash,
+    FUN.VALUE = integer(1),
+    mod = batches
+  )
+}
+
+cdl_number_batches <- function(plan_size, batch_size) {
+  out <- floor(plan_size / batch_size) +
+    (plan_size > batch_size && plan_size %% batch_size > 0)
+  out + as.integer(out < 1)
 }
