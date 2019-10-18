@@ -19,24 +19,16 @@ create_drake_layout <- function(
     allowed_globals_targets = ht_new(c(import_names, plan$target))
   )
   imports <- cdl_prepare_imports(config)
-  imports_kernel <- cdl_imports_kernel(config, imports)
-  import_layout <- memo_expr(
+  config$imports_kernel <- cdl_imports_kernel(config, imports)
+  config$import_layout <- memo_expr(
     cdl_analyze_imports(config, imports),
     config$cache,
-    imports_kernel
+    config$imports_kernel
   )
-  knitr_hash <- cdl_get_knitr_hash(config)
-  command_layout <- memo_expr(
-    cdl_analyze_commands(config),
-    config$cache,
-    config$plan,
-    config$trigger,
-    import_layout,
-    imports_kernel,
-    knitr_hash
-  )
+  config$knitr_hash <- cdl_get_knitr_hash(config)
+  command_layout <- cdl_analyze_commands(config)
   cdl_set_knitr_files(config = config, layout = command_layout)
-  c(import_layout, command_layout)
+  c(config$import_layout, command_layout)
 }
 
 # https://github.com/ropensci/drake/issues/887 # nolint
@@ -60,7 +52,12 @@ cdl_set_knitr_files <- function(config, layout) {
 cdl_get_knitr_hash <- function(config, layout) {
   config$logger$minor("get knitr hash")
   if (!config$cache$exists(key = "knitr", namespace = "memoize")) {
-    return(NA_character_)
+    out <- digest::digest(
+      "",
+      algo = config$cache$hash_algorithm,
+      serialize = FALSE
+    )
+    return(out)
   }
   knitr_files <- config$cache$safe_get(key = "knitr", namespace = "memoize")
   knitr_hashes <- lightly_parallelize(
@@ -157,7 +154,6 @@ cdl_analyze_commands <- function(config) {
     config$trigger$change,
     allowed_globals = config$allowed_globals_targets
   )
-  config$plan <- config$plan[order(config$plan$target), ]
   cdl_init_layout(config)
 }
 
@@ -165,7 +161,7 @@ cdl_init_layout <- function(config) {
   layout <- drake_pmap(.l = config$plan, .f = list, jobs = config$jobs)
   batch <- cdl_batch_partition(config$plan)
   nms <- names(layout) <- config$plan$target
-  layout_batches <- tapply(X = layout, INDEX = batch, FUN = list)
+  layout_batches <- split(layout, f = batch)
   ht_targets <- ht_new(config$plan$target)
   out <- lightly_parallelize(
     X = layout_batches,
@@ -174,9 +170,9 @@ cdl_init_layout <- function(config) {
     config = config,
     ht_targets = ht_targets
   )
-  out <- unlist(out, recursive = FALSE, use.names = FALSE)
-  names(out) <- nms
-  out
+  names(out) <- NULL
+  out <- unlist(out, recursive = FALSE, use.names = TRUE)
+  out[nms]
 }
 
 cdl_prepare_layout_memo <- function(layout_batch, ht_targets, config) {
@@ -187,7 +183,12 @@ cdl_prepare_layout_memo <- function(layout_batch, ht_targets, config) {
       config = config
     ),
     cache = config$cache,
-    layout_batch = layout_batch
+    layout_batch[order(names(layout_batch))],
+    config$plan,
+    config$trigger,
+    config$import_layout,
+    config$imports_kernel,
+    config$knitr_hash
   )
 }
 
@@ -310,7 +311,7 @@ cdl_parse_trigger <- function(trigger, envir) {
 }
 
 cdl_batch_partition <- function(plan) {
-  batches <- cdl_number_batches(plan_size = nrow(plan), batch_size = 1e3)
+  batches <- cdl_number_batches(plan_size = nrow(plan), batch_size = 10)
   vapply(
     plan$target,
     FUN = integer_hash,

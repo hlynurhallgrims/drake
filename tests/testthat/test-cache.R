@@ -84,6 +84,7 @@ test_with_dir("dependency profile", {
   dp <- deps_profile(target = a, config = config)
   expect_true(as.logical(dp[dp$name == "depend", "changed"]))
   expect_equal(sum(dp$changed), 1)
+  config$plan <- drake_plan(a = b)
   config$plan$command <- "b + c"
   config$layout <- create_drake_layout(
     plan = config$plan,
@@ -481,7 +482,7 @@ test_with_dir("loadd() does not load imports", {
 
 test_with_dir("selection and filtering in progress", {
   skip_on_cran() # CRAN gets whitelist tests only (check time limits).
-  plan <- drake_plan(x_a = TRUE, y_b = TRUE, x_c = stop())
+  plan <- drake_plan(x_a = TRUE, y_b = FALSE, x_c = stop())
   expect_error(make(plan))
   out <- progress(x_a, y_b, x_c, d)
   exp <- weak_tibble(

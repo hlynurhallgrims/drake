@@ -3,6 +3,7 @@
 ## Enhancements
 
 - Document transformation functions in a way that avoids having to create true functions (#979).
+- Memoize preprocessing in batches (#1028, @gmbecker).
 
 
 # Version 7.7.0
